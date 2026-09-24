@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>NDURANCE — Camera Wall</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Space+Grotesk:wght@600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.4.0/css/all.min.css">
+<style>
+  :root { --bg:#0a0a0f; --border:rgba(255,255,255,.08); --text:#f2f2f5; --muted:#8b8b96; --red:#f87171; }
+  * { box-sizing: border-box; }
+  html, body { margin:0; height:100%; background:var(--bg); color:var(--text); font-family:Inter,sans-serif; overflow:hidden; }
+  .topbar { display:flex; align-items:center; justify-content:space-between; padding:12px 22px; border-bottom:1px solid var(--border); }
+  .brand { display:flex; align-items:center; gap:10px; font-family:'Space Grotesk',sans-serif; font-weight:700; font-size:16px; }
+  .brand i { background:linear-gradient(135deg,#8b7fe0,#e07fc0); width:28px;height:28px;border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:13px; }
+  .status { display:flex; align-items:center; gap:14px; font-size:13px; color:var(--muted); }
+  .rec-badge { display:flex; align-items:center; gap:7px; padding:5px 12px; border-radius:20px; background:rgba(255,255,255,.05); }
+  .rec-badge.live { color:var(--red); }
+  .rec-dot { width:7px; height:7px; border-radius:50%; background:var(--muted); }
+  .rec-badge.live .rec-dot { background:var(--red); animation:pulse 1.2s infinite; }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.3} }
+  .timer { font-size:17px; font-weight:600; font-variant-numeric: tabular-nums; }
+  .grid { display:grid; grid-template-columns:repeat(3,1fr); gap:2px; height:calc(100vh - 53px); background:var(--border); }
+  .tile { position:relative; background:#000; overflow:hidden; display:flex; align-items:center; justify-content:center; }
+  .tile .cam-visual { position:absolute; inset:0; width:100%; height:100%; transform-origin:center center; transition:transform .25s ease; }
+  .tile video { width:100%; height:100%; object-fit:contain; }
+  .tile canvas { position:absolute; inset:0; width:100%; height:100%; object-fit:contain; }
+  .tile .chip { position:absolute; top:12px; left:12px; font-size:11px; font-weight:700; letter-spacing:.08em; padding:5px 12px; border-radius:20px; background:rgba(0,0,0,.55); backdrop-filter:blur(4px); z-index:2; text-transform:uppercase; }
+  .tile .rotate-btn { position:absolute; top:10px; right:10px; z-index:3; width:30px; height:30px; border-radius:50%; border:1px solid var(--border); background:rgba(0,0,0,.55); backdrop-filter:blur(4px); color:var(--text); display:flex; align-items:center; justify-content:center; cursor:pointer; font-size:12px; transition:background .15s ease, transform .15s ease; }
+  .tile .rotate-btn:hover { background:rgba(0,0,0,.8); }
+  .tile .rotate-btn:active { transform:scale(0.92); }
+  .tile .no-signal { display:flex; flex-direction:column; align-items:center; justify-content:center; gap:10px; color:var(--muted); text-align:center; padding:20px; }
+  .tile .no-signal i { font-size:32px; }
+  .opener-error { height:100vh; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:12px; color:var(--muted); text-align:center; padding:40px; }
+  .opener-error i { font-size:40px; color:var(--red); }
+</style>
+</head>
+<body>
+<div id="root">
+  <div class="topbar">
+    <div class="brand"><i class="fa-solid fa-person-running"></i> NDURANCE — Camera Wall</div>
+    <div class="status">
+      <span class="rec-badge" id="rec-badge"><span class="rec-dot"></span><span id="rec-text">Idle</span></span>
+      <span class="timer" id="timer">00:00</span>
+    </div>
+  </div>
+  <div class="grid" id="grid">
+    <div class="tile" id="tile-left"><span class="chip">left</span><button type="button" class="rotate-btn" data-view="left" title="Rotate left camera 90°"><i class="fa-solid fa-rotate"></i></button></div>
+    <div class="tile" id="tile-back"><span class="chip">back</span><button type="button" class="rotate-btn" data-view="back" title="Rotate back camera 90°"><i class="fa-solid fa-rotate"></i></button></div>
+    <div class="tile" id="tile-right"><span class="chip">right</span><button type="button" class="rotate-btn" data-view="right" title="Rotate right camera 90°"><i class="fa-solid fa-rotate"></i></button></div>
+  </div>
+</div>
+
+<script>
+'use strict';
+const VIEWS = ['left', 'back', 'right'];
+const OPENER = window.opener;
+
+function showOpenerError() {
+  document.getElementById('root').innerHTML = `
+    <div class="opener-error">
+      <i class="fa-solid fa-triangle-exclamation"></i>
+      <div>This window needs to be opened from Capture Lab's "Second Display" button<br>so it can access the live camera feed.</div>
+    </div>`;
+}
+
+if (!OPENER || OPENER.closed || !OPENER.CameraManager) {
+  showOpenerError();
+} else {
+  const CM = OPENER.CameraManager;
+  const Renderer = OPENER.Renderer;
+  const els = {};
+  VIEWS.forEach(v => {
+    const tile = document.getElementById(`tile-${v}`);
+    const rotateBtn = tile.querySelector('.rotate-btn');
+    els[v] = { tile, rotateBtn, visual: null, video: null, canvas: null, hasStream: false };
+    if (rotateBtn) rotateBtn.onclick = (ev) => {
+      ev.stopPropagation();
+      // CM is the opener's CameraManager — this mutates the same shared
+      // rotations object the primary tab's tiles read, so both stay in sync.
+      const deg = CM.rotateView(view);
+      applyRotation(view, deg);
+    };
+  });
+
+  function applyRotation(view, deg) {
+    const e = els[view];
+    if (e.visual) e.visual.style.transform = deg ? `rotate(${deg}deg)` : '';
+  }
+
+  function ensureVideo(view) {
+    const e = els[view];
+    if (e.video) return;
+    const tile = e.tile;
+    const visual = document.createElement('div');
+    visual.className = 'cam-visual';
+    const video = document.createElement('video');
+    video.autoplay = true; video.muted = true; video.playsInline = true;
+    const canvas = document.createElement('canvas');
+    visual.appendChild(video); visual.appendChild(canvas);
+    tile.appendChild(visual);
+    e.visual = visual; e.video = video; e.canvas = canvas; e.hasStream = true;
+    applyRotation(view, CM.getRotation ? CM.getRotation(view) : 0);
+    const noSig = tile.querySelector('.no-signal');
+    if (noSig) noSig.remove();
+  }
+
+  function showNoSignal(view) {
+    const e = els[view];
+    if (!e.hasStream) return;
+    e.visual?.remove(); e.video = null; e.canvas = null; e.visual = null; e.hasStream = false;
+    const chip = e.tile.querySelector('.chip');
+    e.tile.innerHTML = '';
+    e.tile.appendChild(chip);
+    if (e.rotateBtn) e.tile.appendChild(e.rotateBtn);
+    const div = document.createElement('div');
+    div.className = 'no-signal';
+    div.innerHTML = `<i class="fa-solid fa-video-slash"></i>Waiting for ${view} camera…`;
+    e.tile.appendChild(div);
+  }
+
+  function syncStreams() {
+    VIEWS.forEach(view => {
+      const stream = CM.streams && CM.streams[view];
+      const e = els[view];
+      if (stream) {
+        ensureVideo(view);
+        if (e.video.srcObject !== stream) { e.video.srcObject = stream; e.video.play().catch(() => {}); }
+        if (CM.getRotation) applyRotation(view, CM.getRotation(view));
+      } else {
+        showNoSignal(view);
+      }
+    });
+  }
+
+  function drawLoop() {
+    VIEWS.forEach(view => {
+      const e = els[view];
+      if (!e.hasStream || !e.video || !e.canvas) return;
+      const payload = CM.latest && CM.latest[view];
+      const score = payload?.overall_score?.overall_score ?? 0;
+      if (Renderer && e.video.videoWidth) {
+        Renderer.draw(e.canvas, payload?.landmarks || null, e.video, score);
+      }
+    });
+    requestAnimationFrame(drawLoop);
+  }
+
+  showNoSignal('left'); showNoSignal('back'); showNoSignal('right');
+  syncStreams();
+  setInterval(syncStreams, 800);
+  requestAnimationFrame(drawLoop);
+
+  function setSession(active) {
+    const badge = document.getElementById('rec-badge');
+    const text = document.getElementById('rec-text');
+    badge.classList.toggle('live', active);
+    text.textContent = active ? 'Recording' : 'Idle';
+  }
+  let timerInt = null;
+  function startTimer(startedAt) {
+    clearInterval(timerInt);
+    timerInt = setInterval(() => {
+      const sec = Math.max(0, Math.round((Date.now() - startedAt) / 1000));
+      const m = Math.floor(sec / 60), s = sec % 60;
+      document.getElementById('timer').textContent = String(m).padStart(2, '0') + ':' + String(s).padStart(2, '0');
+    }, 500);
+  }
+  try {
+    const bus = new BroadcastChannel('ndurance-live');
+    bus.onmessage = (ev) => {
+      const msg = ev.data;
+      if (msg?.type === 'session') {
+        setSession(msg.state === 'recording');
+        if (msg.state === 'recording') startTimer(Date.now());
+        else { clearInterval(timerInt); document.getElementById('timer').textContent = '00:00'; }
+      }
+    };
+  } catch (e) { /* recording badge just won't sync, video still works */ }
+
+  window.addEventListener('beforeunload', () => clearInterval(timerInt));
+}
+</script>
+</body>
+</html>
